@@ -17,6 +17,8 @@ Web Technology course project (North East University Bangladesh, CSE).
 - **Dashboard** — total projects/tasks, completed/pending/overdue, assigned to me, status donut chart, 7‑day completion chart, priority breakdown, project progress, upcoming & overdue tasks, recent activity.
 - **Search & filtering** — search projects and tasks, filter by status/priority/project/assignee/overdue, sort by deadline/priority/etc., pagination.
 - **Advanced** — project members with roles (Owner / Admin / Member / Viewer), task assignment, task comments, activity history, role-based access control enforced on the backend.
+- **Team collaboration** — a Team page lists everyone you share a project with, their shared projects and workload (open / in progress / overdue / done) with a link to their tasks. Comments support `@username` mentions (with a picker), highlighted in the thread.
+- **Notifications** — in-app notifications with an unread badge (refreshed every 30 s) when someone assigns you a task, changes the status of a task you created or are assigned, comments on a task you're involved in, @mentions you, adds or removes you from a project or changes your role. Clicking one opens the related project/task; mark one or all as read.
 
 ### Roles
 
@@ -29,7 +31,7 @@ Web Technology course project (North East University Bangladesh, CSE).
 
 ## Database design
 
-`accounts_user` · `core_project` · `core_projectmember` (project ↔ user, role, unique pair) · `core_task` (→ project, assignee, created_by) · `core_comment` (→ task, author) · `core_activitylog` (→ project, task, user).
+`accounts_user` · `core_project` · `core_projectmember` (project ↔ user, role, unique pair) · `core_task` (→ project, assignee, created_by) · `core_comment` (→ task, author) · `core_activitylog` (→ project, task, user) · `core_notification` (→ recipient, actor, project, task).
 All relationships use foreign keys with appropriate `CASCADE` / `SET NULL` rules.
 
 ---
@@ -123,6 +125,12 @@ Production build: `flutter build web` → static files in `frontend/build/web`.
 | PATCH/DELETE | `comments/{id}/` | Edit / delete comment |
 | GET | `dashboard/` | Dashboard statistics |
 | GET | `activity/` | Recent activity feed |
+| GET | `team/` | People you share projects with, and their workload |
+| GET | `notifications/?unread=true` | Your notifications (paginated) |
+| GET | `notifications/unread-count/` | Unread count for the badge |
+| POST | `notifications/{id}/read/` | Mark one as read |
+| POST | `notifications/read-all/` | Mark all as read |
+| DELETE | `notifications/{id}/` | Remove a notification |
 
 Filters accept comma-separated values, e.g. `tasks/?status=todo,in_progress&ordering=due_date`.
 

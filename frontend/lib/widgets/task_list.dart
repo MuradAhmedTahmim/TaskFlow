@@ -23,11 +23,22 @@ const taskOrderings = {
 /// Searchable, filterable, paginated list of tasks. When [projectId] is set,
 /// only tasks from that project are shown.
 class TaskListView extends StatefulWidget {
-  const TaskListView({super.key, this.projectId, this.canCreate = true, this.onChanged, this.initialAssignee, this.initialOverdue = false});
+  const TaskListView({
+    super.key,
+    this.projectId,
+    this.canCreate = true,
+    this.onChanged,
+    this.initialAssignee,
+    this.initialAssigneeName,
+    this.initialOverdue = false,
+  });
   final int? projectId;
   final bool canCreate;
   final VoidCallback? onChanged;
   final String? initialAssignee;
+
+  /// Display name for a teammate filter (when [initialAssignee] is a user id).
+  final String? initialAssigneeName;
   final bool initialOverdue;
 
   @override
@@ -187,6 +198,12 @@ class TaskListViewState extends State<TaskListView> {
           items: taskOrderings,
           onChanged: (v) => _apply(() => _ordering = v ?? 'due_date'),
         ),
+        if (_assignee != null && _assignee != 'me')
+          InputChip(
+            avatar: const Icon(Icons.person_outline, size: 18),
+            label: Text('Assigned to ${widget.initialAssigneeName ?? 'teammate'}'),
+            onDeleted: () => _apply(() => _assignee = null),
+          ),
         FilterChip(
           label: const Text('Assigned to me'),
           selected: _assignee == 'me',

@@ -153,3 +153,48 @@ class ActivityLog(models.Model):
 
 def log_activity(*, project, user, action, message, task=None):
     return ActivityLog.objects.create(project=project, task=task, user=user, action=action, message=message[:255])
+
+
+class Notification(models.Model):
+    """An in-app message for one user about something a teammate did."""
+
+    class Kind(models.TextChoices):
+        ASSIGNED = "assigned", "Task assigned"
+        STATUS_CHANGED = "status_changed", "Task status changed"
+        COMMENT = "comment", "New comment"
+        MENTION = "mention", "Mentioned"
+        MEMBER_ADDED = "member_added", "Added to project"
+        MEMBER_REMOVED = "member_removed", "Removed from project"
+        ROLE_CHANGED = "role_changed", "Role changed"
+
+    recipient = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="notifications")
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
+    kind = models.CharField(max_length=20, choices=Kind.choices)
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, null=True, blank=True, related_name="+")
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, null=True, blank=True, related_name="+")
+    message = models.CharField(max_length=255)
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [models.Index(fields=["recipient", "is_read"])]
+
+    def __str__(self) -> str:
+        return f"To {self.recipient}: {self.message}"
+
+
+def notify(recipients, *, actor, kind, message, project=None, task=None):
+    """Create one notification per recipient, skipping the actor and duplicates."""
+    seen = set()
+    rows = []
+    for user in recipients:
+        if user is None or user.pk == getattr(actor, "pk", None) or user.pk in seen:
+            continue
+        seen.add(user.pk)
+        rows.append(Notification(recipient=user, actor=actor, kind=kind, project=project, task=task,
+                                 message=message[:255]))
+    Notification.objects.bulk_create(rows)
+    return rows

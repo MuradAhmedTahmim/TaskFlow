@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rest_framework.test import APITestCase
 
-from core.models import ActivityLog, Project, ProjectMember, Task
+from core.models import ActivityLog, Notification, Project, ProjectMember, Task
 
 User = get_user_model()
 PASSWORD = "Str0ng-Pass!word"
@@ -244,3 +244,91 @@ class TaskTests(BaseAPITest):
         self.assertEqual(len(data["completion_trend"]), 7)
         self.assertEqual(data["completion_trend"][-1]["completed"], 1)
         self.assertEqual(data["project_progress"][0]["progress"], 33)
+
+
+class CollaborationTests(BaseAPITest):
+    def setUp(self):
+        self.owner, self.alice, self.bob = self.make_user("owner"), self.make_user("alice"), self.make_user("bob")
+        self.project = self.make_project(self.owner, name="Team")
+        self.outsider = self.make_user("outsider")
+
+    def kinds(self, user):
+        return list(Notification.objects.filter(recipient=user).values_list("kind", flat=True))
+
+    def test_member_and_role_notifications(self):
+        self.login(self.owner)
+        res = self.client.post(f"/api/projects/{self.project.id}/members/", {"user_id": self.alice.id, "role": "member"}, format="json")
+        self.assertEqual(res.status_code, 201, res.data)
+        self.client.patch(f"/api/projects/{self.project.id}/members/{res.data['id']}/", {"role": "admin"}, format="json")
+        self.assertEqual(self.kinds(self.alice), ["role_changed", "member_added"])
+        self.client.delete(f"/api/projects/{self.project.id}/members/{res.data['id']}/")
+        self.assertEqual(self.kinds(self.alice)[0], "member_removed")
+        self.assertEqual(self.kinds(self.owner), [])  # never notified about own actions
+
+    def test_task_assignment_status_comment_and_mention(self):
+        self.add_member(self.project, self.alice, "member")
+        self.add_member(self.project, self.bob, "member")
+        self.login(self.owner)
+        res = self.client.post("/api/tasks/", {"project": self.project.id, "title": "Spec", "assignee_id": self.alice.id}, format="json")
+        task_id = res.data["id"]
+        self.assertEqual(self.kinds(self.alice), ["assigned"])
+
+        self.login(self.alice)
+        self.client.patch(f"/api/tasks/{task_id}/", {"status": "in_progress"}, format="json")
+        self.assertEqual(self.kinds(self.owner), ["status_changed"])
+        self.assertEqual(self.kinds(self.alice), ["assigned"])  # actor not notified
+
+        # Mention bob (member) and outsider (not a member): only bob gets a mention.
+        self.client.post(f"/api/tasks/{task_id}/comments/", {"body": "@bob can you review? cc @outsider"}, format="json")
+        self.assertEqual(self.kinds(self.bob), ["mention"])
+        self.assertEqual(self.kinds(self.outsider), [])
+        self.assertEqual(self.kinds(self.owner)[0], "comment")  # creator gets a comment notice
+
+        # Bob replies: alice (assignee) and owner (creator) get comment notices, bob does not.
+        self.login(self.bob)
+        self.client.post(f"/api/tasks/{task_id}/comments/", {"body": "Looks good"}, format="json")
+        self.assertEqual(self.kinds(self.alice)[0], "comment")
+        self.assertEqual(self.kinds(self.bob), ["mention"])
+
+    def test_notification_endpoints(self):
+        self.add_member(self.project, self.alice, "member")
+        self.login(self.owner)
+        for i in range(3):
+            self.client.post("/api/tasks/", {"project": self.project.id, "title": f"T{i}", "assignee_id": self.alice.id}, format="json")
+
+        self.login(self.bob)
+        self.assertEqual(self.client.get("/api/notifications/").data["count"], 0)  # only own notifications
+
+        self.login(self.alice)
+        self.assertEqual(self.client.get("/api/notifications/unread-count/").data["count"], 3)
+        first = self.client.get("/api/notifications/").data["results"][0]
+        self.assertEqual(first["actor"]["username"], "owner")
+        self.assertEqual(first["project"], self.project.id)
+        res = self.client.post(f"/api/notifications/{first['id']}/read/")
+        self.assertTrue(res.data["is_read"])
+        self.assertEqual(self.client.get("/api/notifications/?unread=true").data["count"], 2)
+        self.assertEqual(self.client.post("/api/notifications/read-all/").data["updated"], 2)
+        self.assertEqual(self.client.get("/api/notifications/unread-count/").data["count"], 0)
+        self.assertEqual(self.client.delete(f"/api/notifications/{first['id']}/").status_code, 204)
+
+        self.login(self.bob)
+        other = Notification.objects.filter(recipient=self.alice).first()
+        self.assertEqual(self.client.post(f"/api/notifications/{other.id}/read/").status_code, 404)
+
+    def test_team_workload(self):
+        self.add_member(self.project, self.alice, "member")
+        other = self.make_project(self.outsider, name="Hidden")
+        Task.objects.create(project=self.project, title="A", assignee=self.alice, created_by=self.owner)
+        Task.objects.create(project=self.project, title="B", assignee=self.alice, created_by=self.owner,
+                            status="completed")
+        Task.objects.create(project=self.project, title="C", assignee=self.alice, created_by=self.owner,
+                            due_date=timezone.localdate() - timedelta(days=1))
+        Task.objects.create(project=other, title="Hidden", assignee=self.outsider, created_by=self.outsider)
+
+        self.login(self.owner)
+        team = {p["username"]: p for p in self.client.get("/api/team/").data}
+        self.assertEqual(set(team), {"owner", "alice"})  # outsider shares no project
+        self.assertTrue(team["owner"]["is_me"])
+        alice = team["alice"]
+        self.assertEqual((alice["open_tasks"], alice["completed_tasks"], alice["overdue_tasks"]), (2, 1, 1))
+        self.assertEqual(alice["projects"], [{"id": self.project.id, "name": "Team", "role": "member"}])

@@ -332,3 +332,97 @@ class PageResult<T> {
         results: (j['results'] as List).map((e) => parse(e as Map<String, dynamic>)).toList(),
       );
 }
+
+class AppNotification {
+  final int id;
+  final String kind;
+  final String message;
+  final bool isRead;
+  final DateTime? createdAt;
+  final AppUser? actor;
+  final int? projectId;
+  final String? projectName;
+  final int? taskId;
+  final String? taskTitle;
+
+  AppNotification({
+    required this.id,
+    required this.kind,
+    required this.message,
+    this.isRead = false,
+    this.createdAt,
+    this.actor,
+    this.projectId,
+    this.projectName,
+    this.taskId,
+    this.taskTitle,
+  });
+
+  factory AppNotification.fromJson(Map<String, dynamic> j) => AppNotification(
+        id: j['id'],
+        kind: j['kind'] ?? '',
+        message: j['message'] ?? '',
+        isRead: j['is_read'] ?? false,
+        createdAt: parseDate(j['created_at']),
+        actor: AppUser.maybe(j['actor']),
+        projectId: j['project'],
+        projectName: j['project_name'],
+        taskId: j['task'],
+        taskTitle: j['task_title'],
+      );
+
+  AppNotification markedRead() => AppNotification(
+        id: id,
+        kind: kind,
+        message: message,
+        isRead: true,
+        createdAt: createdAt,
+        actor: actor,
+        projectId: projectId,
+        projectName: projectName,
+        taskId: taskId,
+        taskTitle: taskTitle,
+      );
+}
+
+class TeamProject {
+  final int id;
+  final String name;
+  final String role;
+  TeamProject({required this.id, required this.name, required this.role});
+  factory TeamProject.fromJson(Map<String, dynamic> j) => TeamProject(id: j['id'], name: j['name'] ?? '', role: j['role'] ?? '');
+}
+
+/// A person the user shares at least one project with, and their workload
+/// (counted only inside projects the user can see).
+class Teammate {
+  final AppUser user;
+  final bool isMe;
+  final List<TeamProject> projects;
+  final int openTasks;
+  final int inProgressTasks;
+  final int completedTasks;
+  final int overdueTasks;
+
+  Teammate({
+    required this.user,
+    required this.isMe,
+    required this.projects,
+    required this.openTasks,
+    required this.inProgressTasks,
+    required this.completedTasks,
+    required this.overdueTasks,
+  });
+
+  factory Teammate.fromJson(Map<String, dynamic> j) => Teammate(
+        user: AppUser.fromJson(j),
+        isMe: j['is_me'] ?? false,
+        projects: ((j['projects'] ?? []) as List).map((e) => TeamProject.fromJson(e)).toList(),
+        openTasks: j['open_tasks'] ?? 0,
+        inProgressTasks: j['in_progress_tasks'] ?? 0,
+        completedTasks: j['completed_tasks'] ?? 0,
+        overdueTasks: j['overdue_tasks'] ?? 0,
+      );
+
+  int get totalTasks => openTasks + completedTasks;
+}

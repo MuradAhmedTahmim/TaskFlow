@@ -3,7 +3,7 @@ from rest_framework import serializers
 
 from accounts.serializers import UserSummarySerializer
 
-from .models import ActivityLog, Comment, Project, ProjectMember, Task
+from .models import ActivityLog, Comment, Notification, Project, ProjectMember, Task
 from .permissions import CAN_WRITE_TASKS, get_role
 
 User = get_user_model()
@@ -142,3 +142,15 @@ class ActivityLogSerializer(serializers.ModelSerializer):
     class Meta:
         model = ActivityLog
         fields = ["id", "project", "project_name", "task", "task_title", "user", "action", "message", "created_at"]
+
+
+class NotificationSerializer(serializers.ModelSerializer):
+    actor = UserSummarySerializer(read_only=True)
+    project_name = serializers.CharField(source="project.name", read_only=True, default=None)
+    task_title = serializers.CharField(source="task.title", read_only=True, default=None)
+
+    class Meta:
+        model = Notification
+        fields = ["id", "kind", "message", "is_read", "created_at", "actor",
+                  "project", "project_name", "task", "task_title"]
+        read_only_fields = fields

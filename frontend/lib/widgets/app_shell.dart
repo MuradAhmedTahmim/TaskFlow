@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../services/auth_provider.dart';
+import '../services/notification_center.dart';
 import 'common.dart';
 
 class _Dest {
@@ -17,6 +18,8 @@ const _destinations = [
   _Dest('/', 'Dashboard', Icons.space_dashboard_outlined, Icons.space_dashboard),
   _Dest('/projects', 'Projects', Icons.folder_outlined, Icons.folder),
   _Dest('/tasks', 'Tasks', Icons.check_circle_outline, Icons.check_circle),
+  _Dest('/team', 'Team', Icons.groups_outlined, Icons.groups),
+  _Dest('/notifications', 'Notifications', Icons.notifications_outlined, Icons.notifications),
   _Dest('/profile', 'Profile', Icons.person_outline, Icons.person),
 ];
 
@@ -50,7 +53,7 @@ class AppShell extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: const _Logo(),
-        actions: const [_UserMenu(), SizedBox(width: 8)],
+        actions: const [_BellButton(), SizedBox(width: 4), _UserMenu(), SizedBox(width: 8)],
       ),
       drawer: Drawer(child: SafeArea(child: _NavList(selected: _index, closeDrawer: true))),
       body: child,
@@ -110,6 +113,7 @@ class _NavList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final unread = context.watch<NotificationCenter>().unread;
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       children: [
@@ -122,7 +126,10 @@ class _NavList extends StatelessWidget {
               selectedTileColor: scheme.primaryContainer,
               selectedColor: scheme.onPrimaryContainer,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              leading: Icon(i == selected ? _destinations[i].selectedIcon : _destinations[i].icon),
+              leading: _UnreadBadge(
+                count: _destinations[i].path == '/notifications' ? unread : 0,
+                child: Icon(i == selected ? _destinations[i].selectedIcon : _destinations[i].icon),
+              ),
               title: Text(_destinations[i].label, style: const TextStyle(fontWeight: FontWeight.w500)),
               onTap: () {
                 if (closeDrawer) Navigator.of(context).pop();
@@ -131,6 +138,33 @@ class _NavList extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+}
+
+class _UnreadBadge extends StatelessWidget {
+  const _UnreadBadge({required this.count, required this.child});
+  final int count;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (count <= 0) return child;
+    return Badge(label: Text(count > 99 ? '99+' : '$count'), child: child);
+  }
+}
+
+/// Bell with unread badge, used in the narrow-screen app bar.
+class _BellButton extends StatelessWidget {
+  const _BellButton();
+
+  @override
+  Widget build(BuildContext context) {
+    final unread = context.watch<NotificationCenter>().unread;
+    return IconButton(
+      tooltip: 'Notifications',
+      onPressed: () => context.go('/notifications'),
+      icon: _UnreadBadge(count: unread, child: const Icon(Icons.notifications_outlined)),
     );
   }
 }

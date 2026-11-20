@@ -12,11 +12,15 @@ import '../theme.dart';
 import '../widgets/activity_tile.dart';
 import '../widgets/common.dart';
 import '../widgets/form_dialogs.dart';
+import '../widgets/task_detail_dialog.dart';
 import '../widgets/task_list.dart';
 
 class ProjectDetailScreen extends StatefulWidget {
-  const ProjectDetailScreen({super.key, required this.projectId});
+  const ProjectDetailScreen({super.key, required this.projectId, this.openTaskId});
   final int projectId;
+
+  /// When set (e.g. from a notification), this task's details open after loading.
+  final int? openTaskId;
 
   @override
   State<ProjectDetailScreen> createState() => _ProjectDetailScreenState();
@@ -40,10 +44,23 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
           _project = p;
           _error = null;
         });
+        _openLinkedTask();
       }
     } on ApiException catch (e) {
       if (mounted) setState(() => _error = e.statusCode == 404 ? 'Project not found or you are not a member.' : e.message);
     }
+  }
+
+  bool _openedLinkedTask = false;
+
+  void _openLinkedTask() {
+    final id = widget.openTaskId;
+    if (id == null || _openedLinkedTask) return;
+    _openedLinkedTask = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      if (await showTaskDetail(context, id)) _load();
+    });
   }
 
   Future<void> _edit() async {

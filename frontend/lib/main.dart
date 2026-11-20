@@ -6,6 +6,7 @@ import 'router.dart';
 import 'services/api.dart';
 import 'services/api_client.dart';
 import 'services/auth_provider.dart';
+import 'services/notification_center.dart';
 import 'theme.dart';
 
 void main() async {
@@ -13,13 +14,15 @@ void main() async {
   final client = ApiClient();
   final auth = AuthProvider(client);
   await auth.init();
-  runApp(TaskFlowApp(auth: auth, api: TaskFlowApi(client)));
+  final api = TaskFlowApi(client);
+  runApp(TaskFlowApp(auth: auth, api: api, notifications: NotificationCenter(api, auth)));
 }
 
 class TaskFlowApp extends StatefulWidget {
-  const TaskFlowApp({super.key, required this.auth, required this.api});
+  const TaskFlowApp({super.key, required this.auth, required this.api, required this.notifications});
   final AuthProvider auth;
   final TaskFlowApi api;
+  final NotificationCenter notifications;
 
   @override
   State<TaskFlowApp> createState() => _TaskFlowAppState();
@@ -34,6 +37,7 @@ class _TaskFlowAppState extends State<TaskFlowApp> {
       providers: [
         ChangeNotifierProvider.value(value: widget.auth),
         Provider.value(value: widget.api),
+        ChangeNotifierProvider.value(value: widget.notifications),
       ],
       child: MaterialApp.router(
         title: AppConfig.appName,

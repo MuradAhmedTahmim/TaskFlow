@@ -266,7 +266,9 @@ class _Comments extends StatefulWidget {
 
 class _CommentsState extends State<_Comments> {
   final _input = TextEditingController();
+  final _inputFocus = FocusNode();
   List<Comment>? _comments;
+  List<Member>? _members;
   String? _error;
   bool _sending = false;
 
@@ -279,6 +281,7 @@ class _CommentsState extends State<_Comments> {
   @override
   void dispose() {
     _input.dispose();
+    _inputFocus.dispose();
     super.dispose();
   }
 
@@ -309,6 +312,51 @@ class _CommentsState extends State<_Comments> {
     } finally {
       if (mounted) setState(() => _sending = false);
     }
+  }
+
+  /// Lets the user pick a project member and inserts "@username " at the cursor.
+  Future<void> _mention(BuildContext anchor) async {
+    final api = context.read<TaskFlowApi>();
+    final me = context.read<AuthProvider>().user?.id;
+    try {
+      _members ??= await api.members(widget.task.projectId);
+    } on ApiException catch (e) {
+      if (mounted) showSnack(context, e.message, error: true);
+      return;
+    }
+    if (!mounted || !anchor.mounted) return;
+    final box = anchor.findRenderObject() as RenderBox;
+    final overlay = Overlay.of(anchor).context.findRenderObject() as RenderBox;
+    final pos = box.localToGlobal(Offset.zero, ancestor: overlay);
+    final picked = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(pos.dx, pos.dy - 8, overlay.size.width - pos.dx - box.size.width, 0),
+      items: [
+        for (final m in _members!.where((m) => m.user.id != me))
+          PopupMenuItem(
+            value: m.user.username,
+            child: Row(children: [
+              UserAvatar(user: m.user, radius: 12),
+              const SizedBox(width: 10),
+              Text(m.user.displayName),
+              const SizedBox(width: 6),
+              Text('@${m.user.username}', style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+            ]),
+          ),
+      ],
+    );
+    if (picked == null) return;
+    final sel = _input.selection;
+    final text = _input.text;
+    final start = sel.isValid ? sel.start : text.length;
+    final end = sel.isValid ? sel.end : text.length;
+    final needsSpace = start > 0 && !RegExp(r'\s').hasMatch(text[start - 1]);
+    final insert = '${needsSpace ? ' ' : ''}@$picked ';
+    _input.value = TextEditingValue(
+      text: text.replaceRange(start, end, insert),
+      selection: TextSelection.collapsed(offset: start + insert.length),
+    );
+    _inputFocus.requestFocus();
   }
 
   Future<void> _edit(Comment c) async {
@@ -391,7 +439,7 @@ class _CommentsState extends State<_Comments> {
                             ),
                         ]),
                         const SizedBox(height: 2),
-                        SelectableText(c.body, style: const TextStyle(height: 1.4)),
+                        SelectableText.rich(mentionSpan(context, c.body), style: const TextStyle(height: 1.4)),
                       ]),
                     ),
                   ]);
@@ -405,10 +453,21 @@ class _CommentsState extends State<_Comments> {
           Expanded(
             child: TextField(
               controller: _input,
+              focusNode: _inputFocus,
               minLines: 1,
               maxLines: 4,
               maxLength: 2000,
-              decoration: const InputDecoration(hintText: 'Write a comment…', counterText: ''),
+              decoration: InputDecoration(
+                hintText: 'Write a comment… use @ to mention',
+                counterText: '',
+                suffixIcon: Builder(
+                  builder: (anchor) => IconButton(
+                    tooltip: 'Mention a teammate',
+                    icon: const Icon(Icons.alternate_email),
+                    onPressed: () => _mention(anchor),
+                  ),
+                ),
+              ),
               onSubmitted: (_) => _send(),
             ),
           ),
@@ -422,6 +481,22 @@ class _CommentsState extends State<_Comments> {
       ),
     ]);
   }
+}
+
+final _mentionPattern = RegExp(r'(?<![\w@])@[\w.+-]+');
+
+/// Comment text with @mentions highlighted.
+TextSpan mentionSpan(BuildContext context, String text) {
+  final color = Theme.of(context).colorScheme.primary;
+  final spans = <TextSpan>[];
+  var last = 0;
+  for (final m in _mentionPattern.allMatches(text)) {
+    if (m.start > last) spans.add(TextSpan(text: text.substring(last, m.start)));
+    spans.add(TextSpan(text: m[0], style: TextStyle(color: color, fontWeight: FontWeight.w600)));
+    last = m.end;
+  }
+  if (last < text.length) spans.add(TextSpan(text: text.substring(last)));
+  return TextSpan(children: spans);
 }
 
 class _TaskActivity extends StatelessWidget {

@@ -2,10 +2,12 @@ import 'package:go_router/go_router.dart';
 
 import 'screens/auth_screens.dart';
 import 'screens/dashboard_screen.dart';
+import 'screens/notifications_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/project_detail_screen.dart';
 import 'screens/projects_screen.dart';
 import 'screens/tasks_screen.dart';
+import 'screens/team_screen.dart';
 import 'services/auth_provider.dart';
 import 'widgets/app_shell.dart';
 
@@ -40,12 +42,20 @@ GoRouter buildRouter(AuthProvider auth) {
                 path: ':id',
                 pageBuilder: (_, state) => NoTransitionPage(
                   key: state.pageKey,
-                  child: ProjectDetailScreen(projectId: int.tryParse(state.pathParameters['id']!) ?? 0),
+                  child: ProjectDetailScreen(
+                    projectId: int.tryParse(state.pathParameters['id']!) ?? 0,
+                    openTaskId: int.tryParse(state.uri.queryParameters['task'] ?? ''),
+                  ),
                 ),
               ),
             ],
           ),
           GoRoute(path: '/tasks', pageBuilder: (_, _) => const NoTransitionPage(child: TasksScreen())),
+          GoRoute(path: '/team', pageBuilder: (_, _) => const NoTransitionPage(child: TeamScreen())),
+          GoRoute(
+            path: '/notifications',
+            pageBuilder: (_, _) => const NoTransitionPage(child: NotificationsScreen()),
+          ),
           GoRoute(path: '/profile', pageBuilder: (_, _) => const NoTransitionPage(child: ProfileScreen())),
         ],
       ),

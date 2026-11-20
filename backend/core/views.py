@@ -12,7 +12,11 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import ActivityLog, Comment, Project, ProjectMember, Task, log_activity
+import re
+
+from django.contrib.auth import get_user_model
+
+from .models import ActivityLog, Comment, Notification, Project, ProjectMember, Task, log_activity, notify
 from .permissions import (
     CAN_COMMENT,
     CAN_MANAGE_ALL_TASKS,
@@ -21,9 +25,12 @@ from .permissions import (
     IsTaskProjectMember,
     get_role,
 )
+from accounts.serializers import UserSummarySerializer
+
 from .serializers import (
     ActivityLogSerializer,
     CommentSerializer,
+    NotificationSerializer,
     ProjectMemberSerializer,
     ProjectSerializer,
     TaskSerializer,
@@ -31,6 +38,17 @@ from .serializers import (
 
 Action = ActivityLog.Action
 Role = ProjectMember.Role
+Kind = Notification.Kind
+User = get_user_model()
+MENTION_RE = re.compile(r"(?<![\w@])@([\w.+-]+)")
+
+
+def mentioned_members(text, project):
+    """Project members whose @username appears in [text]."""
+    names = {n.rstrip(".").lower() for n in MENTION_RE.findall(text or "")}
+    if not names:
+        return []
+    return [m for m in User.objects.filter(memberships__project=project) if m.username.lower() in names]
 PRIORITY_RANK = Case(
     When(priority="low", then=Value(1)),
     When(priority="medium", then=Value(2)),
@@ -55,7 +73,7 @@ def describe_changes(old, new, fields):
         before, after = getattr(old, field), getattr(new, field)
         if before != after:
             label = field.replace("_", " ")
-            changes.append(f"{label}: {before or 'â€”'} â†’ {after or 'â€”'}")
+            changes.append(f"{label}: {before or '—'} → {after or '—'}")
     return changes
 
 
@@ -143,6 +161,8 @@ class ProjectViewSet(viewsets.ModelViewSet):
         membership = serializer.save(project=project)
         log_activity(project=project, user=request.user, action=Action.MEMBER_ADDED,
                      message=f"{request.user.display_name} added {membership.user.display_name} as {membership.role}")
+        notify([membership.user], actor=request.user, kind=Kind.MEMBER_ADDED, project=project,
+               message=f'{request.user.display_name} added you to "{project.name}" as {membership.get_role_display()}')
         return Response(ProjectMemberSerializer(membership).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["patch", "delete"], url_path=r"members/(?P<member_id>\d+)")
@@ -166,6 +186,10 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 verb = "left the project" if is_self else f"removed {membership.user.display_name}"
                 log_activity(project=project, user=request.user, action=Action.MEMBER_REMOVED,
                              message=f"{request.user.display_name} {verb}")
+                if not is_self:
+                    # No project link: the user can no longer open it.
+                    notify([membership.user], actor=request.user, kind=Kind.MEMBER_REMOVED,
+                           message=f'{request.user.display_name} removed you from "{project.name}"')
             return Response(status=status.HTTP_204_NO_CONTENT)
 
         if my_role not in CAN_MANAGE_MEMBERS:
@@ -183,6 +207,9 @@ class ProjectViewSet(viewsets.ModelViewSet):
             log_activity(project=project, user=request.user, action=Action.ROLE_CHANGED,
                          message=f"{request.user.display_name} changed {membership.user.display_name}'s role "
                                  f"from {old_role} to {membership.role}")
+            notify([membership.user], actor=request.user, kind=Kind.ROLE_CHANGED, project=project,
+                   message=f'{request.user.display_name} changed your role in "{project.name}" '
+                           f"to {membership.get_role_display()}")
         return Response(ProjectMemberSerializer(membership).data)
 
     # ---- activity --------------------------------------------------------
@@ -261,6 +288,8 @@ class TaskViewSet(viewsets.ModelViewSet):
             if task.assignee:
                 msg += f" and assigned it to {task.assignee.display_name}"
             log_activity(project=task.project, task=task, user=request.user, action=Action.CREATED, message=msg)
+            notify([task.assignee], actor=request.user, kind=Kind.ASSIGNED, project=task.project, task=task,
+                   message=f'{request.user.display_name} assigned you "{task.title}" in {task.project.name}')
         return Response(self.get_serializer(self._reload(task.pk)).data, status=status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
@@ -277,10 +306,16 @@ class TaskViewSet(viewsets.ModelViewSet):
                 log_activity(project=task.project, task=task, user=user, action=Action.STATUS_CHANGED,
                              message=f'{name} moved "{task.title}" from {before.get_status_display()} '
                                      f'to {task.get_status_display()}')
+                # The new assignee gets the "assigned" notice below instead.
+                watchers = [task.created_by] + ([task.assignee] if before.assignee_id == task.assignee_id else [])
+                notify(watchers, actor=user, kind=Kind.STATUS_CHANGED, project=task.project, task=task,
+                       message=f'{name} moved "{task.title}" to {task.get_status_display()}')
             if before.assignee_id != task.assignee_id:
                 target = task.assignee.display_name if task.assignee else "nobody"
                 log_activity(project=task.project, task=task, user=user, action=Action.ASSIGNED,
                              message=f'{name} assigned "{task.title}" to {target}')
+                notify([task.assignee], actor=user, kind=Kind.ASSIGNED, project=task.project, task=task,
+                       message=f'{name} assigned you "{task.title}" in {task.project.name}')
             if before.project_id != task.project_id:
                 log_activity(project=task.project, task=task, user=user, action=Action.UPDATED,
                              message=f'{name} moved "{task.title}" from project "{before.project.name}"')
@@ -307,8 +342,19 @@ class TaskViewSet(viewsets.ModelViewSet):
         serializer = CommentSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         comment = serializer.save(task=task, author=request.user)
+        name = request.user.display_name
         log_activity(project=task.project, task=task, user=request.user, action=Action.COMMENTED,
-                     message=f'{request.user.display_name} commented on "{task.title}"')
+                     message=f'{name} commented on "{task.title}"')
+        mentioned = mentioned_members(comment.body, task.project)
+        notify(mentioned, actor=request.user, kind=Kind.MENTION, project=task.project, task=task,
+               message=f'{name} mentioned you on "{task.title}": {comment.body[:120]}')
+        # Everyone already involved in the task, except those just mentioned.
+        mentioned_ids = {u.pk for u in mentioned}
+        involved = [task.assignee, task.created_by] + [
+            c.author for c in task.comments.select_related("author").exclude(pk=comment.pk)
+        ]
+        notify([u for u in involved if u and u.pk not in mentioned_ids], actor=request.user, kind=Kind.COMMENT,
+               project=task.project, task=task, message=f'{name} commented on "{task.title}": {comment.body[:120]}')
         return Response(CommentSerializer(comment).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["get"], url_path="activity")
@@ -441,3 +487,81 @@ class DashboardView(APIView):
             "overdue_tasks": TaskSerializer(overdue_list, many=True, context=ctx).data,
             "recent_activity": ActivityLogSerializer(recent, many=True).data,
         })
+
+
+# ---------------------------------------------------------------------------
+# Notifications
+# ---------------------------------------------------------------------------
+class NotificationViewSet(mixins.ListModelMixin, mixins.DestroyModelMixin, viewsets.GenericViewSet):
+    """The signed-in user's notifications. `?unread=true` lists only unread ones."""
+
+    serializer_class = NotificationSerializer
+
+    def get_queryset(self):
+        qs = Notification.objects.filter(recipient=self.request.user).select_related("actor", "project", "task")
+        if self.request.query_params.get("unread") == "true":
+            qs = qs.filter(is_read=False)
+        return qs
+
+    @action(detail=False, methods=["get"], url_path="unread-count")
+    def unread_count(self, request):
+        return Response({"count": Notification.objects.filter(recipient=request.user, is_read=False).count()})
+
+    @action(detail=True, methods=["post"], url_path="read")
+    def mark_read(self, request, pk=None):
+        notification = self.get_object()
+        if not notification.is_read:
+            notification.is_read = True
+            notification.save(update_fields=["is_read"])
+        return Response(self.get_serializer(notification).data)
+
+    @action(detail=False, methods=["post"], url_path="read-all")
+    def mark_all_read(self, request):
+        updated = Notification.objects.filter(recipient=request.user, is_read=False).update(is_read=True)
+        return Response({"updated": updated})
+
+
+# ---------------------------------------------------------------------------
+# Team: everyone the user shares a project with, and their workload
+# ---------------------------------------------------------------------------
+class TeamView(APIView):
+    def get(self, request):
+        today = timezone.localdate()
+        my_projects = user_project_ids(request.user)
+        open_q = ~Q(assigned_tasks__status=Task.Status.COMPLETED)
+        in_mine = Q(assigned_tasks__project__in=my_projects)
+        people = (
+            User.objects.filter(memberships__project__in=my_projects)
+            .distinct()
+            .annotate(
+                open_tasks=Count("assigned_tasks", filter=in_mine & open_q, distinct=True),
+                in_progress_tasks=Count(
+                    "assigned_tasks", filter=in_mine & Q(assigned_tasks__status=Task.Status.IN_PROGRESS), distinct=True
+                ),
+                completed_tasks=Count(
+                    "assigned_tasks", filter=in_mine & Q(assigned_tasks__status=Task.Status.COMPLETED), distinct=True
+                ),
+                overdue_tasks=Count(
+                    "assigned_tasks", filter=in_mine & open_q & Q(assigned_tasks__due_date__lt=today), distinct=True
+                ),
+            )
+            .order_by("-open_tasks", "full_name", "username")
+        )
+        projects_by_user = {}
+        for m in ProjectMember.objects.filter(project__in=my_projects).select_related("project").order_by("project__name"):
+            projects_by_user.setdefault(m.user_id, []).append(
+                {"id": m.project_id, "name": m.project.name, "role": m.role}
+            )
+        data = []
+        for person in people:
+            row = UserSummarySerializer(person).data
+            row.update({
+                "is_me": person.pk == request.user.pk,
+                "projects": projects_by_user.get(person.pk, []),
+                "open_tasks": person.open_tasks,
+                "in_progress_tasks": person.in_progress_tasks,
+                "completed_tasks": person.completed_tasks,
+                "overdue_tasks": person.overdue_tasks,
+            })
+            data.append(row)
+        return Response(data)

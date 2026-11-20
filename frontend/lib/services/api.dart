@@ -98,4 +98,19 @@ class TaskFlowApi {
 
   Future<List<AppUser>> searchUsers(String query) async =>
       (await client.get('/users/', query: {'search': query}) as List).map((e) => AppUser.fromJson(e)).toList();
+
+  // ---- collaboration -----------------------------------------------------
+  Future<List<Teammate>> team() async =>
+      (await client.get('/team/') as List).map((e) => Teammate.fromJson(e)).toList();
+
+  Future<PageResult<AppNotification>> notifications({int page = 1, bool unreadOnly = false}) async =>
+      PageResult.fromJson(
+        await client.get('/notifications/', query: {'page': page, 'page_size': 20, 'unread': unreadOnly ? 'true' : null}),
+        AppNotification.fromJson,
+      );
+  Future<int> unreadNotificationCount() async =>
+      ((await client.get('/notifications/unread-count/')) as Map<String, dynamic>)['count'] ?? 0;
+  Future<void> markNotificationRead(int id) => client.post('/notifications/$id/read/');
+  Future<void> markAllNotificationsRead() => client.post('/notifications/read-all/');
+  Future<void> deleteNotification(int id) => client.delete('/notifications/$id/');
 }

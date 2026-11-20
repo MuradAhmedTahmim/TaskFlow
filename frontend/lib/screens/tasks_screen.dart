@@ -21,6 +21,7 @@ class TasksScreen extends StatelessWidget {
             child: TaskListView(
               key: ValueKey(uri.toString()),
               initialAssignee: query['assignee'],
+              initialAssigneeName: query['assignee_name'],
               initialOverdue: query['overdue'] == 'true',
             ),
           ),
